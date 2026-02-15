@@ -1,0 +1,3 @@
+([('gobo_pad_gui',
+   '/Users/mikelounello/Documents/GoboPad/dist/gobo_pad_gui',
+   'EXECUTABLE')],)

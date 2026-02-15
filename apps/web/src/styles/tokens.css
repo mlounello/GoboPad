@@ -1,0 +1,42 @@
+:root {
+  --color-primary-blue: #284357;
+  --color-primary-gold: #998456;
+  --color-primary-white: #f9f9f8;
+
+  --color-gradient-start: #2b5572;
+  --color-gradient-end: #193245;
+
+  --color-secondary-blue: #2b5572;
+  --color-secondary-slate: #293337;
+  --color-secondary-charcoal: #353535;
+
+  --font-heading-1: "Raleway", sans-serif;
+  --font-heading-2: "Poppins", sans-serif;
+  --font-heading-3: "Raleway", sans-serif;
+  --font-heading-4: "Poppins", sans-serif;
+  --font-heading-5: "Poppins", sans-serif;
+  --font-heading-6: "Open Sans", sans-serif;
+  --font-body: "Poppins", sans-serif;
+
+  --fs-h1: 3.6rem;
+  --fs-h2: 3rem;
+  --fs-h3: 2.4rem;
+  --fs-h4: 2.4rem;
+  --fs-h5: 2.1rem;
+  --fs-h6: 1.5rem;
+  --fs-body: 1.6rem;
+
+  --fw-h1: 500;
+  --fw-h2: 400;
+  --fw-h3: 600;
+  --fw-h4: 400;
+  --fw-h5: 600;
+  --fw-h6: 500;
+  --fw-body: 400;
+
+  --radius-sm: 0.8rem;
+  --radius-md: 1.4rem;
+  --radius-lg: 2.4rem;
+
+  --shadow-soft: 0 10px 30px rgba(25, 50, 69, 0.15);
+}
