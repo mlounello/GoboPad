@@ -3,7 +3,11 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "GoboPad",
-  description: "Generate gobo variants in your browser."
+  description: "Generate gobo variants in your browser.",
+  icons: {
+    icon: "/GoboPad_Logo.png",
+    apple: "/GoboPad_Logo.png"
+  }
 };
 
 type RootLayoutProps = Readonly<{
