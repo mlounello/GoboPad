@@ -355,7 +355,7 @@ export default function HomePage() {
       </section>
 
       <section className="grid">
-        <article className="panel card span-8">
+        <article className="panel card span-4">
           <h3>1. Upload</h3>
           <p>Drag and drop files here or browse from disk. Supported: JPG, PNG, TIFF, BMP, WebP.</p>
 
@@ -392,7 +392,7 @@ export default function HomePage() {
           </div>
         </article>
 
-        <article className="panel card span-4">
+        <article className="panel card span-8">
           <h4>2. Settings</h4>
           <div className="form-grid">
             <label>
@@ -426,6 +426,9 @@ export default function HomePage() {
                 onChange={(event) => setDownloadFolderName(event.target.value)}
                 placeholder="gobopad-output"
               />
+              <p className="helper-text">
+                This name is used for your ZIP filename and the Drive subfolder created during upload.
+              </p>
             </label>
 
             <label>
@@ -434,6 +437,10 @@ export default function HomePage() {
                 <option value="infer">Infer from file name</option>
                 <option value="custom">Custom prefix</option>
               </select>
+              <p className="helper-text">
+                Infer uses the source filename base (example: MZ100.jpg becomes MZ25.jpg). Custom uses your exact
+                prefix for all outputs.
+              </p>
             </label>
 
             {prefixMode === "custom" ? (
