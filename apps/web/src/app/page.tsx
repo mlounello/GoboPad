@@ -358,7 +358,9 @@ export default function HomePage() {
         });
 
         if (!uploadResponse.ok) {
-          throw new Error(`Drive upload failed for ${session.fileName}.`);
+          const errorText = await uploadResponse.text().catch(() => "");
+          const detail = errorText ? ` ${errorText.slice(0, 180)}` : "";
+          throw new Error(`Drive upload failed for ${session.fileName}.${detail}`);
         }
 
         setDriveProgressDone((prev) => prev + 1);

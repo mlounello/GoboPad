@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DRIVE_FILES_URL = "https://www.googleapis.com/drive/v3/files";
 const DRIVE_UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files";
@@ -23,12 +23,24 @@ type UploadSessionRequest = {
 };
 
 type ServiceAccountConfig = {
+  kind: "service-account";
   clientEmail: string;
   privateKey: string;
   parentFolderId: string;
 };
 
+type OAuthConfig = {
+  kind: "oauth";
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+  parentFolderId: string;
+};
+
+type DriveAuthConfig = OAuthConfig | ServiceAccountConfig;
+
 type TokenCache = {
+  cacheKey: string;
   accessToken: string;
   expiresAtMs: number;
 };
@@ -74,13 +86,27 @@ function makeUniqueFileNames(files: UploadFileRequest[]): Array<UploadFileReques
   });
 }
 
-function getServiceAccountConfig(): ServiceAccountConfig {
+function getDriveAuthConfig(): DriveAuthConfig {
+  const oauthClientId = process.env.GOOGLE_DRIVE_CLIENT_ID ?? "";
+  const oauthClientSecret = process.env.GOOGLE_DRIVE_CLIENT_SECRET ?? "";
+  const oauthRefreshToken = process.env.GOOGLE_DRIVE_REFRESH_TOKEN ?? "";
   const jsonConfig = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   const parentFolderId = process.env.GOOGLE_DRIVE_MONOGRAMS_FOLDER_ID ?? "";
+
+  if (oauthClientId && oauthClientSecret && oauthRefreshToken) {
+    return {
+      kind: "oauth",
+      clientId: oauthClientId,
+      clientSecret: oauthClientSecret,
+      refreshToken: oauthRefreshToken,
+      parentFolderId
+    };
+  }
 
   if (jsonConfig) {
     const parsed = JSON.parse(jsonConfig) as { client_email?: string; private_key?: string };
     return {
+      kind: "service-account",
       clientEmail: parsed.client_email ?? "",
       privateKey: parsed.private_key ?? "",
       parentFolderId
@@ -88,14 +114,20 @@ function getServiceAccountConfig(): ServiceAccountConfig {
   }
 
   return {
+    kind: "service-account",
     clientEmail: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ?? "",
     privateKey: (process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY ?? "").replace(/\\n/g, "\n"),
     parentFolderId
   };
 }
 
-function validateConfig(config: ServiceAccountConfig): void {
-  if (!config.clientEmail || !config.privateKey || !config.parentFolderId) {
+function validateConfig(config: DriveAuthConfig): void {
+  const hasAuth =
+    config.kind === "oauth"
+      ? Boolean(config.clientId && config.clientSecret && config.refreshToken)
+      : Boolean(config.clientEmail && config.privateKey);
+
+  if (!hasAuth || !config.parentFolderId) {
     throw new Error("Drive upload is not configured.");
   }
 }
@@ -139,8 +171,28 @@ function createJwt(config: ServiceAccountConfig): string {
   return `${unsignedJwt}.${base64Url(signature)}`;
 }
 
-async function getAccessToken(config: ServiceAccountConfig): Promise<string> {
-  if (tokenCache && tokenCache.expiresAtMs > Date.now() + 60_000) {
+async function readGoogleError(response: Response, fallback: string): Promise<string> {
+  const raw = await response.text().catch(() => "");
+  if (!raw) {
+    return fallback;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as { error?: string | { message?: string }; error_description?: string };
+    const message =
+      typeof parsed.error === "string"
+        ? parsed.error_description || parsed.error
+        : parsed.error?.message || parsed.error_description;
+
+    return message ? `${fallback}: ${message}` : fallback;
+  } catch {
+    return `${fallback}: ${raw.slice(0, 240)}`;
+  }
+}
+
+async function getServiceAccountAccessToken(config: ServiceAccountConfig): Promise<string> {
+  const cacheKey = `${config.kind}:${config.clientEmail}`;
+  if (tokenCache && tokenCache.cacheKey === cacheKey && tokenCache.expiresAtMs > Date.now() + 60_000) {
     return tokenCache.accessToken;
   }
 
@@ -156,7 +208,7 @@ async function getAccessToken(config: ServiceAccountConfig): Promise<string> {
   });
 
   if (!response.ok) {
-    throw new Error("Unable to authorize Drive upload.");
+    throw new Error(await readGoogleError(response, "Unable to authorize Drive upload"));
   }
 
   const data = (await response.json()) as { access_token?: string; expires_in?: number };
@@ -165,11 +217,57 @@ async function getAccessToken(config: ServiceAccountConfig): Promise<string> {
   }
 
   tokenCache = {
+    cacheKey,
     accessToken: data.access_token,
     expiresAtMs: Date.now() + (data.expires_in ?? 3600) * 1000
   };
 
   return data.access_token;
+}
+
+async function getOAuthAccessToken(config: OAuthConfig): Promise<string> {
+  const cacheKey = `${config.kind}:${config.clientId}`;
+  if (tokenCache && tokenCache.cacheKey === cacheKey && tokenCache.expiresAtMs > Date.now() + 60_000) {
+    return tokenCache.accessToken;
+  }
+
+  const response = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: new URLSearchParams({
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+      refresh_token: config.refreshToken,
+      grant_type: "refresh_token"
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(await readGoogleError(response, "Unable to refresh Drive access"));
+  }
+
+  const data = (await response.json()) as { access_token?: string; expires_in?: number };
+  if (!data.access_token) {
+    throw new Error("Drive authorization did not return an access token.");
+  }
+
+  tokenCache = {
+    cacheKey,
+    accessToken: data.access_token,
+    expiresAtMs: Date.now() + (data.expires_in ?? 3600) * 1000
+  };
+
+  return data.access_token;
+}
+
+async function getAccessToken(config: DriveAuthConfig): Promise<string> {
+  if (config.kind === "oauth") {
+    return await getOAuthAccessToken(config);
+  }
+
+  return await getServiceAccountAccessToken(config);
 }
 
 async function createDriveFolder(accessToken: string, folderName: string, parentFolderId: string): Promise<string> {
@@ -187,7 +285,7 @@ async function createDriveFolder(accessToken: string, folderName: string, parent
   });
 
   if (!response.ok) {
-    throw new Error("Unable to create Drive subfolder.");
+    throw new Error(await readGoogleError(response, "Unable to create Drive subfolder"));
   }
 
   const data = (await response.json()) as { id?: string };
@@ -220,7 +318,7 @@ async function createUploadSession(
 
   const uploadUrl = response.headers.get("location");
   if (!response.ok || !uploadUrl) {
-    throw new Error(`Unable to start Drive upload for ${file.driveFileName}.`);
+    throw new Error(await readGoogleError(response, `Unable to start Drive upload for ${file.driveFileName}`));
   }
 
   return {
@@ -235,7 +333,7 @@ export async function POST(request: Request) {
     const body = (await request.json()) as UploadSessionRequest;
     validateRequest(body);
 
-    const config = getServiceAccountConfig();
+    const config = getDriveAuthConfig();
     validateConfig(config);
 
     const accessToken = await getAccessToken(config);
