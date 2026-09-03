@@ -19,6 +19,12 @@ const SIZE_OPTIONS = [100, 75, 50, 33, 25, 10];
 
 type ClientKind = "couple" | "individual" | "company";
 
+type DriveUploadSession = {
+  clientId: string;
+  fileName: string;
+  uploadUrl: string;
+};
+
 function compactName(value: string): string {
   return value.replace(/[^a-zA-Z0-9]+/g, "");
 }
@@ -108,8 +114,11 @@ export default function HomePage() {
   const [clientName, setClientName] = useState("");
   const [entertainerName, setEntertainerName] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isUploadingToDrive, setIsUploadingToDrive] = useState(false);
   const [progressDone, setProgressDone] = useState(0);
   const [progressTotal, setProgressTotal] = useState(0);
+  const [driveProgressDone, setDriveProgressDone] = useState(0);
+  const [driveProgressTotal, setDriveProgressTotal] = useState(0);
   const [statusMessage, setStatusMessage] = useState("Add event details and images to begin.");
   const [errors, setErrors] = useState<string[]>([]);
   const [fileErrors, setFileErrors] = useState<string[]>([]);
@@ -166,6 +175,8 @@ export default function HomePage() {
   function clearGeneratedOutput() {
     setGenerated([]);
     setOutputPreviewUrl(null);
+    setDriveProgressDone(0);
+    setDriveProgressTotal(0);
   }
 
   function updateEventField(update: () => void) {
@@ -294,8 +305,77 @@ export default function HomePage() {
     setStatusMessage("ZIP downloaded.");
   }
 
+  async function uploadFilesToDrive() {
+    if (generated.length === 0) {
+      return;
+    }
+
+    setErrors([]);
+    setIsUploadingToDrive(true);
+    setDriveProgressDone(0);
+    setDriveProgressTotal(generated.length);
+    setStatusMessage("Creating Drive folder...");
+
+    try {
+      const response = await fetch("/api/drive/upload-sessions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          folderName: downloadFolderName,
+          files: generated.map((variant, index) => ({
+            clientId: String(index),
+            fileName: variant.fileName,
+            mimeType: "image/jpeg",
+            size: variant.blob.size
+          }))
+        })
+      });
+
+      const body = (await response.json().catch(() => null)) as
+        | { error?: string; folderName?: string; sessions?: DriveUploadSession[] }
+        | null;
+
+      if (!response.ok || !body?.sessions) {
+        throw new Error(body?.error || "Unable to start Drive upload.");
+      }
+
+      setStatusMessage(`Uploading files to Monograms/${body.folderName || downloadFolderName}...`);
+
+      for (const session of body.sessions) {
+        const variant = generated[Number(session.clientId)];
+        if (!variant) {
+          throw new Error(`Missing generated file for ${session.fileName}.`);
+        }
+
+        const uploadResponse = await fetch(session.uploadUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Type": "image/jpeg"
+          },
+          body: variant.blob
+        });
+
+        if (!uploadResponse.ok) {
+          throw new Error(`Drive upload failed for ${session.fileName}.`);
+        }
+
+        setDriveProgressDone((prev) => prev + 1);
+      }
+
+      setStatusMessage(`Uploaded ${generated.length} file(s) to Monograms/${body.folderName || downloadFolderName}.`);
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : "Drive upload failed."]);
+    } finally {
+      setIsUploadingToDrive(false);
+    }
+  }
+
   const canGenerate = selectedFiles.length > 0 && !parsedSizes.error && !isGenerating && eventDetailsComplete;
   const progressPercent = progressTotal > 0 ? Math.round((progressDone / progressTotal) * 100) : 0;
+  const driveProgressPercent =
+    driveProgressTotal > 0 ? Math.round((driveProgressDone / driveProgressTotal) * 100) : 0;
 
   return (
     <main className="page-wrap">
@@ -523,6 +603,14 @@ export default function HomePage() {
             <button className="btn btn-secondary" type="button" disabled={generated.length === 0} onClick={downloadZip}>
               Download ZIP
             </button>
+            <button
+              className="btn btn-primary"
+              type="button"
+              disabled={generated.length === 0 || isUploadingToDrive}
+              onClick={uploadFilesToDrive}
+            >
+              {isUploadingToDrive ? "Uploading..." : "Upload Files"}
+            </button>
           </div>
 
           <div className="progress-wrap" aria-live="polite">
@@ -532,7 +620,17 @@ export default function HomePage() {
             Progress: {progressDone}/{progressTotal || outputEstimate} ({progressPercent}%)
           </p>
           <p>Estimated outputs: {outputEstimate}</p>
-          <p className="helper-text">ZIP folder: {downloadFolderName}</p>
+          <p className="helper-text">Output folder: {downloadFolderName}</p>
+          {isUploadingToDrive || driveProgressTotal > 0 ? (
+            <div className="drive-upload-status">
+              <div className="progress-wrap" aria-live="polite">
+                <div className="progress-bar" style={{ width: `${driveProgressPercent}%` }} />
+              </div>
+              <p>
+                Drive upload: {driveProgressDone}/{driveProgressTotal} ({driveProgressPercent}%)
+              </p>
+            </div>
+          ) : null}
 
           {parsedSizes.error ? <p className="error-text">{parsedSizes.error}</p> : null}
           {errors.length > 0 ? (

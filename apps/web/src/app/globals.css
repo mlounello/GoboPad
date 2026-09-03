@@ -378,7 +378,8 @@ p {
   object-fit: contain;
 }
 
-.drive-box {
+.drive-box,
+.drive-upload-status {
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid rgba(40, 67, 87, 0.2);
