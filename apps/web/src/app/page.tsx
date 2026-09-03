@@ -425,7 +425,7 @@ export default function HomePage() {
                         setPartnerOneName(event.target.value);
                       })
                     }
-                    placeholder="Krysta"
+                    placeholder="Adam"
                     required
                   />
                 </label>
@@ -438,7 +438,7 @@ export default function HomePage() {
                         setPartnerTwoName(event.target.value);
                       })
                     }
-                    placeholder="Mike"
+                    placeholder="Jennifer"
                     required
                   />
                 </label>
@@ -468,7 +468,7 @@ export default function HomePage() {
                     setEntertainerName(event.target.value);
                   })
                 }
-                placeholder="Adam"
+                placeholder="Mike"
                 required
               />
             </label>
