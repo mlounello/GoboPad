@@ -13,62 +13,133 @@ import {
   parseSizes,
   validateFileCount
 } from "@/lib/padder";
-import {
-  createDriveFolder,
-  DriveUploadError,
-  disconnectGoogleToken,
-  getDriveUser,
-  pickDriveFolder,
-  renewGoogleDriveAccessToken,
-  requestGoogleDriveAccessToken,
-  type DriveUser,
-  uploadVariantsToGoogleDrive
-} from "@/lib/google-drive";
 import { buildZipBlob, downloadBlob, makeZipFileName } from "@/lib/zip";
 
-const PRESET_SIZES = ["100,75,50,33,25,10", "100,80,60,40,20", "100,50,25,10"];
-const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
-const GOOGLE_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_API_KEY ?? "";
-const STORAGE_DRIVE_FOLDER_ID = "gobopad.drive.folder_id";
-const STORAGE_DRIVE_FOLDER_NAME = "gobopad.drive.folder_name";
-const STORAGE_DRIVE_ACCOUNT_EMAIL = "gobopad.drive.account_email";
-const STORAGE_DRIVE_ACCOUNT_NAME = "gobopad.drive.account_name";
+const SIZE_OPTIONS = [100, 75, 50, 33, 25, 10];
+
+type ClientKind = "couple" | "individual" | "company";
+
+function compactName(value: string): string {
+  return value.replace(/[^a-zA-Z0-9]+/g, "");
+}
+
+function firstWord(value: string): string {
+  return value.trim().split(/\s+/)[0] ?? "";
+}
+
+function firstInitial(value: string): string {
+  return compactName(value).charAt(0).toUpperCase();
+}
+
+function companyPrefix(value: string): string {
+  const words = value
+    .trim()
+    .split(/\s+/)
+    .map((word) => compactName(word))
+    .filter(Boolean);
+
+  if (words.length <= 1) {
+    return words[0] ?? "";
+  }
+
+  return words.map((word) => word.charAt(0).toUpperCase()).join("");
+}
+
+function makeClientFolderName(kind: ClientKind, partnerOne: string, partnerTwo: string, clientName: string): string {
+  if (kind === "couple") {
+    return `${compactName(partnerOne)}${compactName(partnerTwo)}`;
+  }
+
+  return compactName(clientName);
+}
+
+function makePrefix(kind: ClientKind, partnerOne: string, partnerTwo: string, clientName: string): string {
+  if (kind === "couple") {
+    return `${firstInitial(partnerOne)}${firstInitial(partnerTwo)}`;
+  }
+  if (kind === "company") {
+    return companyPrefix(clientName);
+  }
+
+  return compactName(firstWord(clientName));
+}
+
+function makeDownloadFolderName(
+  kind: ClientKind,
+  partnerOne: string,
+  partnerTwo: string,
+  clientName: string,
+  entertainer: string
+): string {
+  const clientFolderName = makeClientFolderName(kind, partnerOne, partnerTwo, clientName);
+  const entertainerName = compactName(entertainer);
+
+  if (!clientFolderName && !entertainerName) {
+    return "gobopad-output";
+  }
+  if (!entertainerName) {
+    return clientFolderName;
+  }
+  if (!clientFolderName) {
+    return `GoboPad (${entertainerName})`;
+  }
+
+  return `${clientFolderName} (${entertainerName})`;
+}
+
+function hasRequiredEventDetails(kind: ClientKind, partnerOne: string, partnerTwo: string, clientName: string, entertainer: string): boolean {
+  if (!compactName(entertainer)) {
+    return false;
+  }
+  if (kind === "couple") {
+    return Boolean(compactName(partnerOne) && compactName(partnerTwo));
+  }
+
+  return Boolean(compactName(clientName));
+}
 
 export default function HomePage() {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [sizesInput, setSizesInput] = useState(DEFAULT_SIZES);
-  const [quality, setQuality] = useState(95);
-  const [downloadFolderName, setDownloadFolderName] = useState("gobopad-output");
-  const [prefixMode, setPrefixMode] = useState<"infer" | "custom">("infer");
-  const [prefixInput, setPrefixInput] = useState("");
+  const [selectedSizes, setSelectedSizes] = useState<number[]>(() => parseSizes(DEFAULT_SIZES));
+  const [quality, setQuality] = useState(100);
+  const [clientKind, setClientKind] = useState<ClientKind>("couple");
+  const [partnerOneName, setPartnerOneName] = useState("");
+  const [partnerTwoName, setPartnerTwoName] = useState("");
+  const [clientName, setClientName] = useState("");
+  const [entertainerName, setEntertainerName] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
   const [progressDone, setProgressDone] = useState(0);
   const [progressTotal, setProgressTotal] = useState(0);
-  const [statusMessage, setStatusMessage] = useState("Add images to begin.");
+  const [statusMessage, setStatusMessage] = useState("Add event details and images to begin.");
   const [errors, setErrors] = useState<string[]>([]);
   const [fileErrors, setFileErrors] = useState<string[]>([]);
   const [generated, setGenerated] = useState<GeneratedVariant[]>([]);
   const [sourcePreviewUrl, setSourcePreviewUrl] = useState<string | null>(null);
   const [outputPreviewUrl, setOutputPreviewUrl] = useState<string | null>(null);
-  const [driveFolderId, setDriveFolderId] = useState("");
-  const [driveFolderName, setDriveFolderName] = useState("My Drive root");
-  const [driveUser, setDriveUser] = useState<DriveUser | null>(null);
-  const [driveAccessToken, setDriveAccessToken] = useState("");
-  const [isDriveConnecting, setIsDriveConnecting] = useState(false);
-  const [isDriveUploading, setIsDriveUploading] = useState(false);
-  const [isDrivePickerOpen, setIsDrivePickerOpen] = useState(false);
-  const [driveProgressDone, setDriveProgressDone] = useState(0);
-  const [driveProgressTotal, setDriveProgressTotal] = useState(0);
   const cancelRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const parsedSizes = useMemo(() => {
     try {
-      return { values: parseSizes(sizesInput), error: "" };
+      return { values: parseSizes(selectedSizes.join(",")), error: "" };
     } catch (error) {
       return { values: [] as number[], error: error instanceof Error ? error.message : "Invalid sizes value." };
     }
-  }, [sizesInput]);
+  }, [selectedSizes]);
+
+  const derivedPrefix = useMemo(
+    () => makePrefix(clientKind, partnerOneName, partnerTwoName, clientName),
+    [clientKind, partnerOneName, partnerTwoName, clientName]
+  );
+
+  const downloadFolderName = useMemo(
+    () => makeDownloadFolderName(clientKind, partnerOneName, partnerTwoName, clientName, entertainerName),
+    [clientKind, partnerOneName, partnerTwoName, clientName, entertainerName]
+  );
+  const eventDetailsComplete = useMemo(
+    () => hasRequiredEventDetails(clientKind, partnerOneName, partnerTwoName, clientName, entertainerName),
+    [clientKind, partnerOneName, partnerTwoName, clientName, entertainerName]
+  );
 
   const outputEstimate = getOutputEstimate(selectedFiles.length, parsedSizes.values.length);
 
@@ -92,45 +163,15 @@ export default function HomePage() {
     return () => URL.revokeObjectURL(url);
   }, [generated]);
 
-  function clearPersistedDriveSelection() {
-    localStorage.removeItem(STORAGE_DRIVE_FOLDER_ID);
-    localStorage.removeItem(STORAGE_DRIVE_FOLDER_NAME);
-    localStorage.removeItem(STORAGE_DRIVE_ACCOUNT_EMAIL);
-    localStorage.removeItem(STORAGE_DRIVE_ACCOUNT_NAME);
+  function clearGeneratedOutput() {
+    setGenerated([]);
+    setOutputPreviewUrl(null);
   }
 
-  function persistDriveFolder(folderId: string, folderName: string) {
-    localStorage.setItem(STORAGE_DRIVE_FOLDER_ID, folderId);
-    localStorage.setItem(STORAGE_DRIVE_FOLDER_NAME, folderName);
+  function updateEventField(update: () => void) {
+    update();
+    clearGeneratedOutput();
   }
-
-  function persistDriveAccount(user: DriveUser) {
-    localStorage.setItem(STORAGE_DRIVE_ACCOUNT_EMAIL, user.emailAddress);
-    localStorage.setItem(STORAGE_DRIVE_ACCOUNT_NAME, user.displayName);
-  }
-
-  function clearSelectedFolderOnly() {
-    localStorage.removeItem(STORAGE_DRIVE_FOLDER_ID);
-    localStorage.removeItem(STORAGE_DRIVE_FOLDER_NAME);
-    setDriveFolderId("");
-    setDriveFolderName("My Drive root");
-  }
-
-  useEffect(() => {
-    const persistedFolderId = localStorage.getItem(STORAGE_DRIVE_FOLDER_ID) ?? "";
-    const persistedFolderName = localStorage.getItem(STORAGE_DRIVE_FOLDER_NAME) ?? "My Drive root";
-    const persistedEmail = localStorage.getItem(STORAGE_DRIVE_ACCOUNT_EMAIL) ?? "";
-    const persistedName = localStorage.getItem(STORAGE_DRIVE_ACCOUNT_NAME) ?? "";
-
-    setDriveFolderId(persistedFolderId);
-    setDriveFolderName(persistedFolderName);
-    if (persistedEmail) {
-      setDriveUser({
-        emailAddress: persistedEmail,
-        displayName: persistedName || persistedEmail
-      });
-    }
-  }, []);
 
   function setIncomingFiles(fileList: FileList | null) {
     if (!fileList) {
@@ -146,6 +187,7 @@ export default function HomePage() {
 
     const deduped = Array.from(map.values()).slice(0, MAX_FILES);
     setSelectedFiles(deduped);
+    clearGeneratedOutput();
     setErrors([]);
     if (deduped.length < selectedFiles.length + incoming.length) {
       setStatusMessage(`Some files were skipped. Maximum ${MAX_FILES} files per batch.`);
@@ -158,6 +200,18 @@ export default function HomePage() {
     const next = [...selectedFiles];
     next.splice(index, 1);
     setSelectedFiles(next);
+    clearGeneratedOutput();
+  }
+
+  function toggleSize(size: number) {
+    setSelectedSizes((current) => {
+      if (current.includes(size)) {
+        return current.filter((value) => value !== size);
+      }
+
+      return SIZE_OPTIONS.filter((value) => current.includes(value) || value === size);
+    });
+    clearGeneratedOutput();
   }
 
   async function runGeneration() {
@@ -177,6 +231,9 @@ export default function HomePage() {
       if (quality < 1 || quality > 100) {
         throw new Error("JPEG quality must be 1 to 100.");
       }
+      if (!eventDetailsComplete) {
+        throw new Error("Complete the event fields before processing images.");
+      }
 
       setStatusMessage("Validating image limits...");
       await checkImageGuardrails(selectedFiles);
@@ -188,7 +245,6 @@ export default function HomePage() {
 
       const generatedAll: GeneratedVariant[] = [];
       const perFileErrors: string[] = [];
-      const prefixOverride = prefixMode === "custom" ? prefixInput.trim() : "";
 
       for (const file of selectedFiles) {
         if (cancelRef.current) {
@@ -200,7 +256,7 @@ export default function HomePage() {
             file,
             parsedSizes.values,
             quality,
-            prefixOverride,
+            derivedPrefix,
             () => cancelRef.current,
             () => setProgressDone((prev) => prev + 1)
           );
@@ -238,110 +294,8 @@ export default function HomePage() {
     setStatusMessage("ZIP downloaded.");
   }
 
-  async function connectDrive() {
-    setErrors([]);
-    setIsDriveConnecting(true);
-    try {
-      const token = await requestGoogleDriveAccessToken(GOOGLE_CLIENT_ID);
-      setDriveAccessToken(token);
-      const user = await getDriveUser(token);
-      const persistedEmail = localStorage.getItem(STORAGE_DRIVE_ACCOUNT_EMAIL);
-      if (persistedEmail && persistedEmail !== user.emailAddress) {
-        clearSelectedFolderOnly();
-      }
-      setDriveUser(user);
-      persistDriveAccount(user);
-      setStatusMessage("Google Drive connected.");
-    } catch (error) {
-      setErrors([error instanceof Error ? error.message : "Failed to connect Google Drive."]);
-    } finally {
-      setIsDriveConnecting(false);
-    }
-  }
-
-  function disconnectDrive() {
-    disconnectGoogleToken(driveAccessToken);
-    setDriveAccessToken("");
-    setDriveUser(null);
-    clearPersistedDriveSelection();
-    setDriveFolderId("");
-    setDriveFolderName("My Drive root");
-    setStatusMessage("Google Drive disconnected.");
-  }
-
-  async function chooseDriveFolder() {
-    if (!driveAccessToken) {
-      return;
-    }
-
-    setErrors([]);
-    setIsDrivePickerOpen(true);
-    try {
-      const folder = await pickDriveFolder(driveAccessToken, GOOGLE_API_KEY);
-      if (!folder) {
-        return;
-      }
-      setDriveFolderId(folder.id);
-      setDriveFolderName(folder.name);
-      persistDriveFolder(folder.id, folder.name);
-      setStatusMessage(`Selected Drive folder: ${folder.name}`);
-    } catch (error) {
-      setErrors([error instanceof Error ? error.message : "Failed to open Drive folder picker."]);
-    } finally {
-      setIsDrivePickerOpen(false);
-    }
-  }
-
-  async function uploadToDrive() {
-    if (!driveAccessToken || generated.length === 0) {
-      return;
-    }
-
-    setErrors([]);
-    setIsDriveUploading(true);
-    setDriveProgressDone(0);
-    setDriveProgressTotal(generated.length);
-    setStatusMessage("Creating Drive folder...");
-
-    try {
-      let token = driveAccessToken;
-      let uploadParentFolderId = driveFolderId;
-      let createdFolderName = downloadFolderName.trim() || "gobopad-output";
-      const upload = async () => {
-        const createdFolder = await createDriveFolder(token, createdFolderName, uploadParentFolderId);
-        uploadParentFolderId = createdFolder.id;
-        createdFolderName = createdFolder.name;
-        setStatusMessage(`Uploading files to Drive folder "${createdFolderName}"...`);
-
-        await uploadVariantsToGoogleDrive(generated, token, uploadParentFolderId, (done, total) => {
-          setDriveProgressDone(done);
-          setDriveProgressTotal(total);
-        });
-      };
-
-      try {
-        await upload();
-      } catch (error) {
-        if (error instanceof DriveUploadError && error.status === 401) {
-          token = await renewGoogleDriveAccessToken(GOOGLE_CLIENT_ID);
-          setDriveAccessToken(token);
-          await upload();
-        } else {
-          throw error;
-        }
-      }
-
-      setStatusMessage(`Uploaded ${generated.length} file(s) to Drive folder "${createdFolderName}".`);
-    } catch (error) {
-      setErrors([error instanceof Error ? error.message : "Drive upload failed."]);
-    } finally {
-      setIsDriveUploading(false);
-    }
-  }
-
-  const canGenerate = selectedFiles.length > 0 && !parsedSizes.error && !isGenerating;
+  const canGenerate = selectedFiles.length > 0 && !parsedSizes.error && !isGenerating && eventDetailsComplete;
   const progressPercent = progressTotal > 0 ? Math.round((progressDone / progressTotal) * 100) : 0;
-  const driveProgressPercent = driveProgressTotal > 0 ? Math.round((driveProgressDone / driveProgressTotal) * 100) : 0;
 
   return (
     <main className="page-wrap">
@@ -351,12 +305,108 @@ export default function HomePage() {
           <h2>GoboPad</h2>
         </div>
         <h1>Generate Gobo Variants In Browser</h1>
-        <p>Upload images, choose output percentages, and export all generated files as a ZIP with no backend compute.</p>
+        <p>Enter the event details, upload images, choose output percentages, and export all generated files as a ZIP.</p>
       </section>
 
       <section className="grid">
         <article className="panel card span-4">
-          <h3>1. Upload</h3>
+          <h3>1. Event</h3>
+          <p>These fields create the file prefix and download folder name automatically.</p>
+
+          <div className="form-grid">
+            <label>
+              <span>Client type</span>
+              <select
+                value={clientKind}
+                required
+                onChange={(event) =>
+                  updateEventField(() => {
+                    setClientKind(event.target.value as ClientKind);
+                  })
+                }
+              >
+                <option value="couple">Couple</option>
+                <option value="individual">Individual</option>
+                <option value="company">Company</option>
+              </select>
+            </label>
+
+            {clientKind === "couple" ? (
+              <div className="two-column-fields">
+                <label>
+                  <span>Partner 1</span>
+                  <input
+                    value={partnerOneName}
+                    onChange={(event) =>
+                      updateEventField(() => {
+                        setPartnerOneName(event.target.value);
+                      })
+                    }
+                    placeholder="Krysta"
+                    required
+                  />
+                </label>
+                <label>
+                  <span>Partner 2</span>
+                  <input
+                    value={partnerTwoName}
+                    onChange={(event) =>
+                      updateEventField(() => {
+                        setPartnerTwoName(event.target.value);
+                      })
+                    }
+                    placeholder="Mike"
+                    required
+                  />
+                </label>
+              </div>
+            ) : (
+              <label>
+                <span>{clientKind === "company" ? "Company name" : "Client name"}</span>
+                <input
+                  value={clientName}
+                  onChange={(event) =>
+                    updateEventField(() => {
+                      setClientName(event.target.value);
+                    })
+                  }
+                  placeholder={clientKind === "company" ? "Conway Entertainment" : "Maya"}
+                  required
+                />
+              </label>
+            )}
+
+            <label>
+              <span>Entertainer</span>
+              <input
+                value={entertainerName}
+                onChange={(event) =>
+                  updateEventField(() => {
+                    setEntertainerName(event.target.value);
+                  })
+                }
+                placeholder="Adam"
+                required
+              />
+            </label>
+
+            <div className="derived-box">
+              <p>
+                Prefix: <strong>{derivedPrefix || "Add client details"}</strong>
+              </p>
+              <p>
+                Folder: <strong>{downloadFolderName}</strong>
+              </p>
+            </div>
+            <p className="helper-text">
+              Couples use initials, like KM or AJ. Multi-word companies use initials, like TBF. One-word companies
+              and individual clients use the first word.
+            </p>
+          </div>
+        </article>
+
+        <article className="panel card span-8">
+          <h3>2. Upload</h3>
           <p>Drag and drop files here or browse from disk. Supported: JPG, PNG, TIFF, BMP, WebP.</p>
 
           <label
@@ -391,21 +441,22 @@ export default function HomePage() {
             ))}
           </div>
         </article>
+      </section>
 
+      <section className="grid">
         <article className="panel card span-8">
-          <h4>2. Settings</h4>
+          <h4>3. Settings</h4>
           <div className="form-grid">
-            <label>
+            <div>
               <span>Sizes (%)</span>
-              <input value={sizesInput} onChange={(event) => setSizesInput(event.target.value)} />
-            </label>
-
-            <div className="chip-row">
-              {PRESET_SIZES.map((preset) => (
-                <button key={preset} className="btn btn-secondary btn-mini" type="button" onClick={() => setSizesInput(preset)}>
-                  {preset}
-                </button>
-              ))}
+              <div className="size-grid">
+                {SIZE_OPTIONS.map((size) => (
+                  <label key={size} className="size-option">
+                    <input type="checkbox" checked={selectedSizes.includes(size)} onChange={() => toggleSize(size)} />
+                    <span>{size}%</span>
+                  </label>
+                ))}
+              </div>
             </div>
 
             <label>
@@ -415,143 +466,14 @@ export default function HomePage() {
                 min={1}
                 max={100}
                 value={quality}
-                onChange={(event) => setQuality(Number(event.target.value))}
+                onChange={(event) =>
+                  updateEventField(() => {
+                    setQuality(Number(event.target.value));
+                  })
+                }
               />
             </label>
-
-            <label>
-              <span>Download folder name</span>
-              <input
-                value={downloadFolderName}
-                onChange={(event) => setDownloadFolderName(event.target.value)}
-                placeholder="gobopad-output"
-              />
-              <p className="helper-text">
-                This name is used for your ZIP filename and the Drive subfolder created during upload.
-              </p>
-            </label>
-
-            <label>
-              <span>Prefix Mode</span>
-              <select value={prefixMode} onChange={(event) => setPrefixMode(event.target.value as "infer" | "custom")}>
-                <option value="infer">Infer from file name</option>
-                <option value="custom">Custom prefix</option>
-              </select>
-              <p className="helper-text">
-                Infer uses the source filename base (example: MZ100.jpg becomes MZ25.jpg). Custom uses your exact
-                prefix for all outputs.
-              </p>
-            </label>
-
-            {prefixMode === "custom" ? (
-              <label>
-                <span>Custom prefix</span>
-                <input value={prefixInput} onChange={(event) => setPrefixInput(event.target.value)} placeholder="BE" />
-              </label>
-            ) : null}
           </div>
-        </article>
-      </section>
-
-      <section className="grid">
-        <article className="panel card span-8">
-          <h3>3. Generate</h3>
-          <p>{statusMessage}</p>
-          <div className="btn-row">
-            <button className="btn btn-primary" type="button" disabled={!canGenerate} onClick={runGeneration}>
-              {isGenerating ? "Generating..." : "Generate Variants"}
-            </button>
-            <button
-              className="btn btn-secondary"
-              type="button"
-              disabled={!isGenerating}
-              onClick={() => {
-                cancelRef.current = true;
-              }}
-            >
-              Cancel
-            </button>
-            <button className="btn btn-secondary" type="button" disabled={generated.length === 0} onClick={downloadZip}>
-              Download ZIP
-            </button>
-            <button
-              className="btn btn-secondary"
-              type="button"
-              disabled={isDriveConnecting || !GOOGLE_CLIENT_ID}
-              onClick={connectDrive}
-            >
-              {driveAccessToken ? "Reconnect Drive" : isDriveConnecting ? "Connecting..." : "Connect Google Drive"}
-            </button>
-            <button className="btn btn-secondary" type="button" disabled={!driveAccessToken} onClick={disconnectDrive}>
-              Disconnect Drive
-            </button>
-            <button
-              className="btn btn-secondary"
-              type="button"
-              disabled={!driveAccessToken || !GOOGLE_API_KEY || isDrivePickerOpen}
-              onClick={chooseDriveFolder}
-            >
-              {isDrivePickerOpen ? "Opening Picker..." : "Choose Folder"}
-            </button>
-            <button
-              className="btn btn-primary"
-              type="button"
-              disabled={!driveAccessToken || generated.length === 0 || isDriveUploading}
-              onClick={uploadToDrive}
-            >
-              {isDriveUploading ? "Uploading..." : "Upload To Drive"}
-            </button>
-          </div>
-
-          <div className="progress-wrap" aria-live="polite">
-            <div className="progress-bar" style={{ width: `${progressPercent}%` }} />
-          </div>
-          <p>
-            Progress: {progressDone}/{progressTotal || outputEstimate} ({progressPercent}%)
-          </p>
-          <p>Estimated outputs: {outputEstimate}</p>
-          <div className="form-grid drive-box">
-            {driveUser ? (
-              <p className="helper-text">
-                Connected as: {driveUser.displayName} ({driveUser.emailAddress})
-              </p>
-            ) : null}
-            <p className="helper-text">Selected destination: {driveFolderName}</p>
-            <p className="helper-text">
-              {GOOGLE_CLIENT_ID
-                ? GOOGLE_API_KEY
-                  ? "Drive is enabled. Connect Drive, use Choose Folder (picker) to set destination, then upload generated files."
-                  : "Drive upload works. Add NEXT_PUBLIC_GOOGLE_API_KEY to enable visual folder picker."
-                : "Set NEXT_PUBLIC_GOOGLE_CLIENT_ID in your environment to enable Drive uploads."}
-            </p>
-            {!driveFolderId ? <p className="helper-text">No folder selected. Upload will use My Drive root.</p> : null}
-            {isDriveUploading || driveProgressTotal > 0 ? (
-              <>
-                <div className="progress-wrap" aria-live="polite">
-                  <div className="progress-bar" style={{ width: `${driveProgressPercent}%` }} />
-                </div>
-                <p>
-                  Drive upload: {driveProgressDone}/{driveProgressTotal} ({driveProgressPercent}%)
-                </p>
-              </>
-            ) : null}
-          </div>
-
-          {parsedSizes.error ? <p className="error-text">{parsedSizes.error}</p> : null}
-          {errors.length > 0 ? (
-            <div className="error-block">
-              {errors.map((error) => (
-                <p key={error}>{error}</p>
-              ))}
-            </div>
-          ) : null}
-          {fileErrors.length > 0 ? (
-            <div className="error-block">
-              {fileErrors.map((error) => (
-                <p key={error}>{error}</p>
-              ))}
-            </div>
-          ) : null}
         </article>
 
         <article className="panel card span-4">
@@ -577,6 +499,56 @@ export default function HomePage() {
               )}
             </div>
           </div>
+        </article>
+      </section>
+
+      <section className="grid">
+        <article className="panel card span-12">
+          <h3>4. Generate</h3>
+          <p>{statusMessage}</p>
+          <div className="btn-row">
+            <button className="btn btn-primary" type="button" disabled={!canGenerate} onClick={runGeneration}>
+              {isGenerating ? "Generating..." : "Generate Variants"}
+            </button>
+            <button
+              className="btn btn-secondary"
+              type="button"
+              disabled={!isGenerating}
+              onClick={() => {
+                cancelRef.current = true;
+              }}
+            >
+              Cancel
+            </button>
+            <button className="btn btn-secondary" type="button" disabled={generated.length === 0} onClick={downloadZip}>
+              Download ZIP
+            </button>
+          </div>
+
+          <div className="progress-wrap" aria-live="polite">
+            <div className="progress-bar" style={{ width: `${progressPercent}%` }} />
+          </div>
+          <p>
+            Progress: {progressDone}/{progressTotal || outputEstimate} ({progressPercent}%)
+          </p>
+          <p>Estimated outputs: {outputEstimate}</p>
+          <p className="helper-text">ZIP folder: {downloadFolderName}</p>
+
+          {parsedSizes.error ? <p className="error-text">{parsedSizes.error}</p> : null}
+          {errors.length > 0 ? (
+            <div className="error-block">
+              {errors.map((error) => (
+                <p key={error}>{error}</p>
+              ))}
+            </div>
+          ) : null}
+          {fileErrors.length > 0 ? (
+            <div className="error-block">
+              {fileErrors.map((error) => (
+                <p key={error}>{error}</p>
+              ))}
+            </div>
+          ) : null}
         </article>
       </section>
     </main>

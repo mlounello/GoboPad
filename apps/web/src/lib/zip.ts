@@ -5,9 +5,9 @@ function sanitizeFolderName(raw: string): string {
   const cleaned = raw
     .trim()
     .replace(/[\x00-\x1f\\/:*?"<>|]+/g, "_")
-    .replace(/\s+/g, "-")
+    .replace(/\s+/g, " ")
     .replace(/_+/g, "_")
-    .replace(/-+/g, "-");
+    .trim();
 
   return cleaned || "gobopad-output";
 }

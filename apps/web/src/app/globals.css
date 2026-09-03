@@ -147,6 +147,10 @@ p {
   grid-column: span 8;
 }
 
+.span-12 {
+  grid-column: span 12;
+}
+
 .status-list {
   margin-top: 1rem;
   display: grid;
@@ -243,7 +247,8 @@ p {
   gap: 0.4rem;
 }
 
-.form-grid span {
+.form-grid span,
+.form-grid > div > span {
   font-size: 1.3rem;
   font-weight: 600;
   color: var(--color-secondary-slate);
@@ -256,6 +261,61 @@ p {
   padding: 0.8rem 1rem;
   font-family: var(--font-body);
   font-size: 1.4rem;
+}
+
+.form-grid input::placeholder {
+  color: rgba(41, 51, 55, 0.46);
+  opacity: 1;
+}
+
+.two-column-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.derived-box {
+  display: grid;
+  gap: 0.4rem;
+  padding: 1rem;
+  border: 1px solid rgba(153, 132, 86, 0.3);
+  border-radius: var(--radius-sm);
+  background: rgba(153, 132, 86, 0.1);
+}
+
+.derived-box strong {
+  color: var(--color-secondary-slate);
+}
+
+.size-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(7.2rem, 1fr));
+  gap: 0.8rem;
+  margin-top: 0.5rem;
+}
+
+.size-option {
+  min-height: 4.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  border: 1px solid rgba(40, 67, 87, 0.22);
+  border-radius: var(--radius-sm);
+  background: rgba(40, 67, 87, 0.06);
+  cursor: pointer;
+}
+
+.size-option:has(input:checked) {
+  border-color: rgba(43, 85, 114, 0.78);
+  background: rgba(43, 85, 114, 0.16);
+}
+
+.size-option input {
+  width: 1.6rem;
+  height: 1.6rem;
+  padding: 0;
+  accent-color: var(--color-secondary-blue);
 }
 
 .chip-row {
@@ -331,8 +391,13 @@ p {
 
 @media (max-width: 900px) {
   .span-4,
-  .span-8 {
+  .span-8,
+  .span-12 {
     grid-column: span 12;
+  }
+
+  .size-grid {
+    grid-template-columns: repeat(3, minmax(7.2rem, 1fr));
   }
 
   .hero {
@@ -342,5 +407,12 @@ p {
   .brand-logo {
     width: 5.6rem;
     height: 5.6rem;
+  }
+}
+
+@media (max-width: 520px) {
+  .two-column-fields,
+  .size-grid {
+    grid-template-columns: 1fr;
   }
 }
