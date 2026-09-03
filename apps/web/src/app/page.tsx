@@ -349,18 +349,19 @@ export default function HomePage() {
           throw new Error(`Missing generated file for ${session.fileName}.`);
         }
 
-        const uploadResponse = await fetch(session.uploadUrl, {
-          method: "PUT",
-          headers: {
-            "Content-Type": "image/jpeg"
-          },
-          body: variant.blob
+        const uploadForm = new FormData();
+        uploadForm.set("uploadUrl", session.uploadUrl);
+        uploadForm.set("fileName", session.fileName);
+        uploadForm.set("file", variant.blob, session.fileName);
+
+        const uploadResponse = await fetch("/api/drive/upload-file", {
+          method: "POST",
+          body: uploadForm
         });
 
         if (!uploadResponse.ok) {
-          const errorText = await uploadResponse.text().catch(() => "");
-          const detail = errorText ? ` ${errorText.slice(0, 180)}` : "";
-          throw new Error(`Drive upload failed for ${session.fileName}.${detail}`);
+          const uploadBody = (await uploadResponse.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(uploadBody?.error || `Drive upload failed for ${session.fileName}.`);
         }
 
         setDriveProgressDone((prev) => prev + 1);
